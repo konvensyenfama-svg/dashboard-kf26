@@ -1,0 +1,5 @@
+{
+  "name": "Copy of FAMA Convention Attendance Dashboard",
+  "description": "An interactive real-time dashboard tracking attendance for the FAMA Convention, visualizing data by date and state using Recharts and Supabase.",
+  "requestFramePermissions": []
+}
