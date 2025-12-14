@@ -27,10 +27,10 @@ import {
 
 // Preset Targets configuration
 const PRESET_TARGETS: Record<string, number> = {
-  'KETUA PENGARAH': 9,
-  'TKP (PIA)': 17,
-  'TKP (KP)': 15,
-  'TKP (SMO)': 14,
+  'KETUA PENGARAH': 10,
+  'TKP (PIA)': 18,
+  'TKP (KP)': 16,
+  'TKP (SMO)': 15,
   'FAMA KELANTAN': 11,
   'FAMA JOHOR': 15,
   'FAMA SELANGOR': 14,
@@ -449,7 +449,7 @@ const App: React.FC = () => {
                 <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
                    <Users className="w-5 h-5" />
                 </div>
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Kehadiran</p>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Jumlah Kehadiran Keseluruhan</p>
               </div>
               <div className="flex items-baseline gap-2 mb-2">
                 <span className="text-4xl font-bold text-slate-900 tracking-tight">
@@ -487,7 +487,7 @@ const App: React.FC = () => {
                 <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
                    <Calendar className="w-5 h-5" />
                 </div>
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Hari Tertinggi</p>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Kehadiran Tertinggi (Hari)</p>
               </div>
               
               <div className="mb-2">
@@ -515,7 +515,7 @@ const App: React.FC = () => {
                 <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
                    <MapPin className="w-5 h-5" />
                 </div>
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Negeri Terbaik</p>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Wing / Negeri Terbaik</p>
               </div>
               
               <div className="mb-2">
@@ -542,10 +542,10 @@ const App: React.FC = () => {
             <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                  Prestasi Mengikut Negeri
+                  Prestasi Mengikut Wing / Negeri
                   {selectedState !== 'all' && <span className="text-xs font-normal px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">Filtered</span>}
                 </h2>
-                <p className="text-sm text-slate-500 mt-1">Carta menunjukkan jumlah kehadiran (warna) berbanding sasaran (kelabu).</p>
+                <p className="text-sm text-slate-500 mt-1">Carta menunjukkan jumlah kehadiran berbanding sasaran.</p>
               </div>
               <div className="mt-4 sm:mt-0 flex items-center gap-6 text-xs font-medium text-slate-600">
                 <div className="flex items-center gap-2">
