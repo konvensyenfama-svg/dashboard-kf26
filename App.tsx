@@ -29,8 +29,8 @@ import {
 const PRESET_TARGETS: Record<string, number> = {
   'KETUA PENGARAH': 10,
   'TKP (PIA)': 17,
-  'TKP (KP)': 17,
-  'TKP (SMO)': 15,
+  'TKP (KP)': 19,
+  'TKP (SMO)': 13,
   'FAMA KELANTAN': 10,
   'FAMA JOHOR': 15,
   'FAMA SELANGOR': 14,
