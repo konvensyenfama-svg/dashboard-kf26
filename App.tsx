@@ -28,21 +28,21 @@ import {
 // Preset Targets configuration
 const PRESET_TARGETS: Record<string, number> = {
   'KETUA PENGARAH': 10,
-  'TKP (PIA)': 18,
-  'TKP (KP)': 16,
+  'TKP (PIA)': 17,
+  'TKP (KP)': 17,
   'TKP (SMO)': 15,
-  'FAMA KELANTAN': 11,
+  'FAMA KELANTAN': 10,
   'FAMA JOHOR': 15,
   'FAMA SELANGOR': 14,
-  'FAMA SABAH': 20,
+  'FAMA SABAH': 19,
   'FAMA SARAWAK': 13,
   'FAMA NEGERI SEMBILAN': 12,
   'FAMA TERENGGANU': 12,
-  'FAMA PAHANG': 18,
+  'FAMA PAHANG': 17,
   'FAMA KEDAH': 13,
   'FAMA PERAK': 15,
   'FAMA PERLIS': 6,
-  'FAMA PULAU PINANG': 9,
+  'FAMA PULAU PINANG': 8,
   'FAMA MELAKA': 8
 };
 
