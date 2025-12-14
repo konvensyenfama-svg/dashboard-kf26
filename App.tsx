@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from './services/supabaseClient';
-import { AttendanceRecord, DashboardStats, DateStat, StateStat } from './types';
 import {
   BarChart,
   Bar,
@@ -10,8 +9,6 @@ import {
   Tooltip,
   ResponsiveContainer,
   Cell,
-  Legend,
-  ReferenceLine,
   LabelList
 } from 'recharts';
 import {
@@ -21,11 +18,16 @@ import {
   RefreshCw,
   AlertCircle,
   Filter,
-  Clock,
-  ChevronRight
+  Lock,
+  Search,
+  User,
+  UserX,
+  CheckCircle,
+  Database
 } from 'lucide-react';
 
-// Preset Targets configuration
+// --- CONFIGURATIONS ---
+
 const PRESET_TARGETS: Record<string, number> = {
   'KETUA PENGARAH': 10,
   'TKP (PIA)': 17,
@@ -46,31 +48,108 @@ const PRESET_TARGETS: Record<string, number> = {
   'FAMA MELAKA': 8
 };
 
+// Custom Sort Order
+const SORT_ORDER = [
+  'KETUA PENGARAH',
+  'TKP (PIA)',
+  'TKP (KP)',
+  'TKP (SMO)',
+  'FAMA PERLIS',
+  'FAMA KEDAH',
+  'FAMA PULAU PINANG',
+  'FAMA PERAK',
+  'FAMA SELANGOR',
+  'FAMA NEGERI SEMBILAN',
+  'FAMA MELAKA',
+  'FAMA JOHOR',
+  'FAMA PAHANG',
+  'FAMA TERENGGANU',
+  'FAMA KELANTAN',
+  'FAMA SARAWAK',
+  'FAMA SABAH'
+];
+
 const COLORS = {
-  primary: '#2563EB', // Blue 600
-  secondary: '#3B82F6', // Blue 500
-  accent: '#1E40AF',    // Blue 800
-  slate: '#64748B',     // Slate 500
-  target: '#E2E8F0',    // Slate 200 (lighter for target background)
-  success: '#10B981',   // Emerald 500
-  warning: '#F59E0B',   // Amber 500
-  danger: '#EF4444'     // Red 500
+  primary: '#2563EB',
+  secondary: '#3B82F6',
+  accent: '#1E40AF',
+  slate: '#64748B',
+  target: '#E2E8F0',
+  success: '#10B981',
+  warning: '#F59E0B',
+  danger: '#EF4444'
 };
+
+// --- TYPES ---
+export interface AttendanceRecord {
+  no_pekerja: string;
+  nama: string;
+  penempatan: string;
+  tarikh_kehadiran: string;
+  wing_negeri: string;
+  sesi: string;
+}
+
+// Type untuk data dari table master list
+export interface MasterRecord {
+  no_pekerja: string;
+  nama: string;
+  wing_negeri: string;
+  penempatan: string;
+}
+
+export interface DateStat {
+  date: string;
+  count: number;
+}
+
+export interface StateStat {
+  state: string;
+  count: number;
+  target: number;
+  percentage: number;
+}
+
+export interface DashboardStats {
+  totalParticipants: number;
+  totalTarget: number;
+  overallPercentage: number;
+  topDay: DateStat | null;
+  topState: StateStat | null;
+  dateDistribution: DateStat[];
+  stateDistribution: StateStat[];
+  filteredData: AttendanceRecord[];
+  notRegisteredData: MasterRecord[];
+}
 
 const App: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   
-  // Raw data storage
+  // Tab State
+  const [activeTab, setActiveTab] = useState<'registered' | 'not_registered'>('registered');
+   
+  // Data Storage
   const [rawData, setRawData] = useState<AttendanceRecord[]>([]);
+  const [masterData, setMasterData] = useState<MasterRecord[]>([]); // New State untuk Master List
 
   // Filter States
   const [selectedDate, setSelectedDate] = useState<string>('all');
   const [selectedSession, setSelectedSession] = useState<string>('all');
   const [selectedState, setSelectedState] = useState<string>('all');
 
-  // Derived lists for dropdowns
+  // Winner Lock
+  const [lockedWinner, setLockedWinner] = useState<{state: string, percentage: number} | null>(() => {
+    try {
+      const saved = localStorage.getItem('fama_champion_lock');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      return null;
+    }
+  });
+
+  // Derived lists
   const availableDates = useMemo(() => {
     const dates = new Set(rawData.map(r => r.tarikh_kehadiran).filter(Boolean));
     return Array.from(dates).sort();
@@ -78,33 +157,37 @@ const App: React.FC = () => {
 
   const availableSessions = useMemo(() => {
     let sourceData = rawData;
-    
-    // Filter sessions based on selected date
     if (selectedDate !== 'all') {
       sourceData = rawData.filter(r => r.tarikh_kehadiran === selectedDate);
     }
-
     const sessions = new Set(sourceData.map(r => r.sesi).filter(Boolean));
     return Array.from(sessions).sort();
   }, [rawData, selectedDate]);
 
   const availableStates = useMemo(() => {
-    // Merge preset keys with actual data to ensure all are covered
     const states = new Set([
       ...Object.keys(PRESET_TARGETS),
-      ...rawData.map(r => r.wing_negeri).filter(Boolean)
+      ...rawData.map(r => r.wing_negeri).filter(Boolean),
+      ...masterData.map(r => r.wing_negeri).filter(Boolean) // Include states from master list too
     ] as string[]);
-    return Array.from(states).sort();
-  }, [rawData]);
 
-  // Reset selected session when date changes
+    return Array.from(states).sort((a, b) => {
+      const indexA = SORT_ORDER.indexOf(a);
+      const indexB = SORT_ORDER.indexOf(b);
+      if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+      if (indexA !== -1) return -1;
+      if (indexB !== -1) return 1;
+      return a.localeCompare(b);
+    });
+  }, [rawData, masterData]);
+
   useEffect(() => {
     setSelectedSession('all');
   }, [selectedDate]);
 
-  // Main Processing Logic with Filters
+  // Main Logic
   const stats: DashboardStats = useMemo(() => {
-    // 1. Filter Data
+    // 1. Filter Registered Data
     const filtered = rawData.filter(record => {
       const matchDate = selectedDate === 'all' || record.tarikh_kehadiran === selectedDate;
       const matchSession = selectedSession === 'all' || record.sesi === selectedSession;
@@ -112,39 +195,44 @@ const App: React.FC = () => {
       return matchDate && matchSession && matchState;
     });
 
-    // 2. Aggregate Counts
+    // 2. Cari Yang Belum Daftar (Compare rawData vs masterData)
+    // Ambil list ID yang dah hadir
+    const registeredIDs = new Set(rawData.map(r => r.no_pekerja));
+    
+    // Filter Master List yang ID dia TIADA dalam registeredIDs
+    let notRegistered = masterData.filter(staff => !registeredIDs.has(staff.no_pekerja));
+
+    // Apply Filter Negeri juga untuk list 'Belum Daftar'
+    if (selectedState !== 'all') {
+      notRegistered = notRegistered.filter(staff => staff.wing_negeri === selectedState);
+    }
+
+    // 3. Aggregate Counts (Logic asal)
     const totalParticipants = filtered.length;
     const dateMap: Record<string, number> = {};
     const stateMap: Record<string, number> = {};
 
     filtered.forEach((record) => {
-      // Date - Using tarikh_kehadiran
       const dateKey = record.tarikh_kehadiran ? record.tarikh_kehadiran.trim() : 'N/A';
       dateMap[dateKey] = (dateMap[dateKey] || 0) + 1;
 
-      // State
       const stateKey = record.wing_negeri ? record.wing_negeri.trim() : 'Lain-lain';
       stateMap[stateKey] = (stateMap[stateKey] || 0) + 1;
     });
 
-    // 3. Transform to Arrays
     const dateDistribution: DateStat[] = Object.entries(dateMap).map(([date, count]) => ({
       date,
       count
     })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    // 4. State Distribution with Targets
-    // We want to show ALL preset states even if count is 0, unless a specific state filter is active
     let stateKeys = Object.keys(PRESET_TARGETS);
-    
-    // If a specific state is selected, only show that one
     if (selectedState !== 'all') {
       stateKeys = [selectedState];
     }
 
     const stateDistribution: StateStat[] = stateKeys.map(key => {
       const count = stateMap[key] || 0;
-      const target = PRESET_TARGETS[key] || 0; // Default to 0 if not in preset (e.g. 'Lain-lain')
+      const target = PRESET_TARGETS[key] || 0;
       return {
         state: key,
         count,
@@ -153,10 +241,8 @@ const App: React.FC = () => {
       };
     });
 
-    // Sort by Percentage descending, then by Count
     stateDistribution.sort((a, b) => b.percentage - a.percentage);
 
-    // 5. KPIs
     let topDay = null;
     let maxDayCount = -1;
     dateDistribution.forEach(d => {
@@ -175,8 +261,6 @@ const App: React.FC = () => {
       }
     });
 
-    // Calculate Total Target based on filters
-    // If 'all' states selected, sum all targets. If specific state, take that target.
     const totalTarget = selectedState === 'all' 
       ? Object.values(PRESET_TARGETS).reduce((a, b) => a + b, 0)
       : (PRESET_TARGETS[selectedState] || 0);
@@ -192,26 +276,56 @@ const App: React.FC = () => {
       topDay,
       topState,
       dateDistribution,
-      stateDistribution
+      stateDistribution,
+      filteredData: filtered,
+      notRegisteredData: notRegistered
     };
-  }, [rawData, selectedDate, selectedSession, selectedState]);
+  }, [rawData, masterData, selectedDate, selectedSession, selectedState]);
 
+  // Lock Winner Logic
+  useEffect(() => {
+    if (lockedWinner) return;
+    const champion = stats.stateDistribution.find(s => s.percentage >= 100);
+    if (champion) {
+      const winnerData = { state: champion.state, percentage: champion.percentage };
+      setLockedWinner(winnerData);
+      localStorage.setItem('fama_champion_lock', JSON.stringify(winnerData));
+    }
+  }, [stats.stateDistribution, lockedWinner]);
+
+  // --- FETCH DATA ---
+
+  // 1. Fetch Master List (Sekali je masa load)
+  useEffect(() => {
+    const fetchMasterList = async () => {
+      if (!supabase) return;
+      
+      const { data, error } = await supabase
+        .from('senarai_peserta_penuh')
+        .select('no_pekerja, nama, wing_negeri, penempatan');
+        
+      if (error) {
+        console.error('Error fetching master list:', error);
+      } else if (data) {
+        setMasterData(data as MasterRecord[]);
+      }
+    };
+
+    fetchMasterList();
+  }, []);
+
+  // 2. Fetch Attendance (Live - Interval)
   const fetchAttendanceData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      if (!supabase) {
-        throw new Error('Supabase configuration missing.');
-      }
+      if (!supabase) throw new Error('Supabase configuration missing.');
 
-      // Fetch 'sesi' and 'tarikh_kehadiran'
       const { data, error: supabaseError } = await supabase
         .from('pendaftaran')
-        .select('no_pekerja, tarikh_kehadiran, wing_negeri, sesi');
+        .select('no_pekerja, nama, penempatan, tarikh_kehadiran, wing_negeri, sesi');
 
-      if (supabaseError) {
-        throw supabaseError;
-      }
+      if (supabaseError) throw supabaseError;
 
       if (data) {
         setRawData(data as AttendanceRecord[]);
@@ -219,7 +333,7 @@ const App: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Error fetching data:', err);
-      setError(err.message || 'Gagal mendapatkan data dari pangkalan data.');
+      setError(err.message || 'Gagal mendapatkan data.');
     } finally {
       setLoading(false);
     }
@@ -231,6 +345,7 @@ const App: React.FC = () => {
     return () => clearInterval(intervalId);
   }, [fetchAttendanceData]);
 
+  // Helper Functions
   const formatDate = (dateString: string) => {
     if (!dateString || dateString === 'N/A') return 'N/A';
     try {
@@ -241,11 +356,9 @@ const App: React.FC = () => {
     }
   };
 
-  // Interactive Click Handlers
   const handleStateClick = (data: any) => {
     if (data && data.activePayload && data.activePayload.length) {
       const stateName = data.activePayload[0].payload.state;
-      // Toggle selection: if already selected, clear it.
       setSelectedState(current => current === stateName ? 'all' : stateName);
     }
   };
@@ -253,52 +366,29 @@ const App: React.FC = () => {
   const handleDateClick = (data: any) => {
     if (data && data.activePayload && data.activePayload.length) {
       const dateValue = data.activePayload[0].payload.date;
-      // Toggle selection
       setSelectedDate(current => current === dateValue ? 'all' : dateValue);
     }
   };
 
-  // Custom Label for the Bar Chart
   const CustomBarLabel = (props: any) => {
     const { x, y, width, height, index } = props;
     const item = stats.stateDistribution[index];
-    
     if (!item) return null;
-
-    // We attach this to the 'target' bar.
-    // width represents item.target in pixels.
     let labelX = x + width + 8;
-
-    // Handle case where count > target (Bar overflow)
-    // We assume linear scale starting at 0.
     if (item.target > 0) {
       const pixelsPerUnit = width / item.target;
       const countWidth = item.count * pixelsPerUnit;
-      if (countWidth > width) {
-         labelX = x + countWidth + 8;
-      }
+      if (countWidth > width) labelX = x + countWidth + 8;
     }
-
     return (
-      <text 
-        x={labelX} 
-        y={y + height / 2 + 1} 
-        fill="#334155" 
-        textAnchor="start" 
-        dominantBaseline="middle"
-        fontSize={11}
-        fontWeight="bold"
-      >
+      <text x={labelX} y={y + height / 2 + 1} fill="#334155" textAnchor="start" dominantBaseline="middle" fontSize={11} fontWeight="bold">
         {`${item.count}/${item.target}`}
       </text>
     );
   };
 
-  // Custom Tooltip for Comparison Chart
   const CustomComparisonTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
-      // Payload[0] is typically the target (axis 0), Payload[1] is actual (axis 1) or vice versa depending on render order
-      // We can grab the full data object from either payload
       const data = payload[0].payload;
       return (
         <div className="bg-white/95 backdrop-blur-sm p-4 border border-slate-100 shadow-xl rounded-xl ring-1 ring-slate-200/50">
@@ -360,22 +450,23 @@ const App: React.FC = () => {
               </p>
             </div>
           </div>
-          
+           
           <div className="flex items-center gap-4">
-             <div className="text-right hidden sm:block">
-              <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Kemaskini Terakhir</p>
-              <p className="text-sm font-medium text-slate-700 font-mono">
-                {lastUpdated.toLocaleTimeString('ms-MY', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-              </p>
-            </div>
-            <button
-              onClick={fetchAttendanceData}
-              disabled={loading}
-              className="group flex items-center space-x-2 bg-white border border-slate-200 hover:border-blue-300 text-slate-600 hover:text-blue-600 px-4 py-2.5 rounded-xl shadow-sm hover:shadow transition-all active:scale-95 disabled:opacity-70 disabled:cursor-not-allowed"
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-blue-500' : 'group-hover:text-blue-500'}`} />
-              <span className="hidden sm:inline font-medium">Muat Semula</span>
-            </button>
+              <div className="text-right hidden sm:block">
+               <p className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Kemaskini Terakhir</p>
+               <p className="text-sm font-medium text-slate-700 font-mono">
+                 {lastUpdated.toLocaleTimeString('ms-MY', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+               </p>
+             </div>
+             
+             <button
+               onClick={fetchAttendanceData}
+               disabled={loading}
+               className="group flex items-center space-x-2 bg-white border border-slate-200 hover:border-blue-300 text-slate-600 hover:text-blue-600 px-4 py-2.5 rounded-xl shadow-sm hover:shadow transition-all active:scale-95 disabled:opacity-70 disabled:cursor-not-allowed"
+             >
+               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-blue-500' : 'group-hover:text-blue-500'}`} />
+               <span className="hidden sm:inline font-medium">Muat Semula</span>
+             </button>
           </div>
         </div>
       </header>
@@ -389,9 +480,8 @@ const App: React.FC = () => {
             </div>
             <span className="text-sm">Tapisan Data</span>
           </div>
-          
+           
           <div className="flex flex-col sm:flex-row w-full sm:w-auto p-2 gap-2">
-            {/* Date Filter */}
             <select 
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
@@ -403,7 +493,6 @@ const App: React.FC = () => {
               ))}
             </select>
 
-            {/* Session Filter */}
             <select 
               value={selectedSession}
               onChange={(e) => setSelectedSession(e.target.value)}
@@ -415,13 +504,12 @@ const App: React.FC = () => {
               ))}
             </select>
 
-            {/* State Filter */}
             <select 
               value={selectedState}
               onChange={(e) => setSelectedState(e.target.value)}
               className="block w-full sm:w-64 pl-3 pr-8 py-2 text-sm bg-slate-50 border-transparent focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 rounded-xl transition-all cursor-pointer hover:bg-slate-100"
             >
-              <option value="all">🏢 Semua Negeri</option>
+              <option value="all">🏢 Semua Wing/Negeri</option>
               {availableStates.map(state => (
                 <option key={state} value={state}>{state}</option>
               ))}
@@ -439,7 +527,7 @@ const App: React.FC = () => {
 
         {/* KPI Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          {/* Card 1: Total Attendance vs Target */}
+          {/* Card 1 */}
           <div className="bg-white rounded-2xl shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100 p-6 relative overflow-hidden group hover:translate-y-[-2px] transition-all duration-300">
             <div className="absolute top-0 right-0 p-6 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
               <Users className="w-32 h-32 text-blue-600" />
@@ -449,7 +537,7 @@ const App: React.FC = () => {
                 <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
                    <Users className="w-5 h-5" />
                 </div>
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Jumlah Kehadiran Keseluruhan</p>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Jumlah Kehadiran</p>
               </div>
               <div className="flex items-baseline gap-2 mb-2">
                 <span className="text-4xl font-bold text-slate-900 tracking-tight">
@@ -459,7 +547,6 @@ const App: React.FC = () => {
                   / {stats.totalTarget.toLocaleString()}
                 </span>
               </div>
-              
               <div className="flex items-center gap-2 mb-4">
                  <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold ${
                    stats.overallPercentage >= 100 ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-blue-50 text-blue-700 border border-blue-100'
@@ -467,7 +554,6 @@ const App: React.FC = () => {
                   {stats.overallPercentage}% Pencapaian
                 </span>
               </div>
-
               <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
                 <div 
                   className={`h-full rounded-full transition-all duration-1000 ease-out ${stats.overallPercentage >= 100 ? 'bg-emerald-500' : 'bg-blue-600'}`}
@@ -477,7 +563,7 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Card 2: Highest Day */}
+          {/* Card 2 */}
           <div className="bg-white rounded-2xl shadow-[0_2px_10px_-3px_rgba(16,185,129,0.1)] border border-slate-100 p-6 relative overflow-hidden group hover:translate-y-[-2px] transition-all duration-300">
              <div className="absolute top-0 right-0 p-6 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
               <Calendar className="w-32 h-32 text-emerald-600" />
@@ -489,13 +575,11 @@ const App: React.FC = () => {
                 </div>
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Kehadiran Tertinggi (Hari)</p>
               </div>
-              
               <div className="mb-2">
                 <span className="text-3xl font-bold text-slate-900 block truncate tracking-tight">
                   {stats.topDay ? formatDate(stats.topDay.date) : '-'}
                 </span>
               </div>
-              
               <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 rounded-lg border border-emerald-100">
                 <span className="text-sm font-bold text-emerald-700">
                    {stats.topDay ? stats.topDay.count.toLocaleString() : 0}
@@ -505,30 +589,34 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Card 3: Best Percentage State */}
+          {/* Card 3 (With Lock) */}
           <div className="bg-white rounded-2xl shadow-[0_2px_10px_-3px_rgba(99,102,241,0.1)] border border-slate-100 p-6 relative overflow-hidden group hover:translate-y-[-2px] transition-all duration-300">
             <div className="absolute top-0 right-0 p-6 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
               <MapPin className="w-32 h-32 text-indigo-600" />
             </div>
              <div className="relative z-10">
                <div className="flex items-center gap-2 mb-3">
-                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
-                   <MapPin className="w-5 h-5" />
+                <div className={`p-2 rounded-lg ${lockedWinner ? 'bg-amber-100 text-amber-600' : 'bg-indigo-50 text-indigo-600'}`}>
+                   {lockedWinner ? <Lock className="w-5 h-5" /> : <MapPin className="w-5 h-5" />}
                 </div>
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Wing / Negeri Terbaik</p>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  {lockedWinner ? 'JUARA SESI (Pertama Capai 100%)' : 'Wing / Negeri Terbaik'}
+                </p>
               </div>
-              
               <div className="mb-2">
                 <span className="text-3xl font-bold text-slate-900 block truncate tracking-tight">
-                  {stats.topState ? stats.topState.state : '-'}
+                  {lockedWinner 
+                    ? lockedWinner.state 
+                    : (stats.topState ? stats.topState.state : '-')}
                 </span>
               </div>
-              
-               <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 rounded-lg border border-indigo-100">
-                <span className="text-sm font-bold text-indigo-700">
-                   {stats.topState ? stats.topState.percentage : 0}%
+               <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${lockedWinner ? 'bg-amber-50 border-amber-200' : 'bg-indigo-50 border-indigo-100'}`}>
+                <span className={`text-sm font-bold ${lockedWinner ? 'text-amber-700' : 'text-indigo-700'}`}>
+                   {lockedWinner 
+                     ? lockedWinner.percentage 
+                     : (stats.topState ? stats.topState.percentage : 0)}%
                 </span>
-                <span className="text-xs text-indigo-600">Pencapaian</span>
+                <span className={`text-xs ${lockedWinner ? 'text-amber-600' : 'text-indigo-600'}`}>Pencapaian</span>
               </div>
             </div>
           </div>
@@ -536,8 +624,6 @@ const App: React.FC = () => {
 
         {/* Charts Section */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
-          
-           {/* Chart 1: State Performance vs Target (Overlapping Bar) */}
            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 lg:col-span-2">
             <div className="mb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-4">
               <div>
@@ -546,16 +632,6 @@ const App: React.FC = () => {
                   {selectedState !== 'all' && <span className="text-xs font-normal px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">Filtered</span>}
                 </h2>
                 <p className="text-sm text-slate-500 mt-1">Carta menunjukkan jumlah kehadiran berbanding sasaran.</p>
-              </div>
-              <div className="mt-4 sm:mt-0 flex items-center gap-6 text-xs font-medium text-slate-600">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-3 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 border border-amber-200"></div>
-                  <span>Hadir</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-3 rounded-full bg-slate-200"></div>
-                  <span>Sasaran</span>
-                </div>
               </div>
             </div>
             
@@ -583,74 +659,22 @@ const App: React.FC = () => {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
-                  
-                  {/* Axis 0: Visible Labels (for layout reference) */}
-                  <YAxis 
-                    type="category" 
-                    dataKey="state" 
-                    yAxisId="0" 
-                    width={180}
-                    tick={{ fontSize: 12, fill: '#475569', fontWeight: 600 }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  
-                  {/* Axis 1: Hidden, Duplicate for Overlap Alignment */}
-                  <YAxis 
-                    type="category" 
-                    dataKey="state" 
-                    yAxisId="1" 
-                    orientation="left" 
-                    width={180} 
-                    hide 
-                  />
-
+                  <YAxis type="category" dataKey="state" yAxisId="0" width={180} tick={{ fontSize: 12, fill: '#475569', fontWeight: 600 }} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="state" yAxisId="1" orientation="left" width={180} hide />
                   <XAxis type="number" hide />
-                  
-                  <Tooltip 
-                    content={<CustomComparisonTooltip />} 
-                    cursor={{ fill: '#f8fafc', opacity: 0.8 }} 
-                  />
-                  
-                  {/* Target Bar (Background) - Wider */}
-                  <Bar 
-                    dataKey="target" 
-                    name="Sasaran" 
-                    yAxisId="0"
-                    fill={COLORS.target} 
-                    radius={[0, 8, 8, 0]} 
-                    barSize={24} 
-                    animationDuration={1500}
-                  >
+                  <Tooltip content={<CustomComparisonTooltip />} cursor={{ fill: '#f8fafc', opacity: 0.8 }} />
+                  <Bar dataKey="target" name="Sasaran" yAxisId="0" fill={COLORS.target} radius={[0, 8, 8, 0]} barSize={24} animationDuration={1500}>
                     <LabelList content={<CustomBarLabel />} />
                   </Bar>
-                  
-                  {/* Actual Bar (Foreground) - Thinner, Rendered ON TOP via second axis or just order */}
-                  <Bar 
-                    dataKey="count" 
-                    name="Hadir" 
-                    yAxisId="1"
-                    radius={[0, 6, 6, 0]} 
-                    barSize={14}
-                    animationDuration={1500}
-                  >
+                  <Bar dataKey="count" name="Hadir" yAxisId="1" radius={[0, 6, 6, 0]} barSize={14} animationDuration={1500}>
                     {
                       stats.stateDistribution.map((entry, index) => {
                         let fillUrl = "url(#barGradientBlue)";
                         if (entry.percentage >= 100) fillUrl = "url(#barGradientGreen)";
                         else if (entry.percentage < 80) fillUrl = "url(#barGradientAmber)";
-                        
-                        // Highlight selected state visually
                         const isSelected = selectedState !== 'all' && selectedState === entry.state;
                         const opacity = selectedState === 'all' || isSelected ? 1 : 0.3;
-
-                        return (
-                          <Cell 
-                            key={`cell-${index}`} 
-                            fill={fillUrl} 
-                            style={{ opacity, transition: 'opacity 0.3s ease' }}
-                          />
-                        );
+                        return <Cell key={`cell-${index}`} fill={fillUrl} style={{ opacity, transition: 'opacity 0.3s ease' }} />;
                       })
                     }
                   </Bar>
@@ -659,23 +683,16 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Chart 2: Date Trend */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 lg:col-span-2">
             <div className="mb-8 border-b border-slate-100 pb-4">
               <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 Trend Kehadiran Harian
                 {selectedDate !== 'all' && <span className="text-xs font-normal px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full">Filtered</span>}
               </h2>
-              <p className="text-sm text-slate-500 mt-1">Klik pada bar tarikh untuk menapis data mengikut hari.</p>
             </div>
             <div className="h-[350px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart 
-                  data={stats.dateDistribution} 
-                  margin={{ top: 10, right: 10, left: 0, bottom: 20 }}
-                  onClick={handleDateClick}
-                  className="cursor-pointer"
-                >
+                <BarChart data={stats.dateDistribution} margin={{ top: 10, right: 10, left: 0, bottom: 20 }} onClick={handleDateClick} className="cursor-pointer">
                   <defs>
                     <linearGradient id="dateGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#6366f1" stopOpacity={1}/>
@@ -683,44 +700,151 @@ const App: React.FC = () => {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis 
-                    dataKey="date" 
-                    tickFormatter={formatDate}
-                    tick={{ fontSize: 12, fill: '#64748B' }}
-                    axisLine={false}
-                    tickLine={false}
-                    dy={10}
-                  />
-                  <YAxis 
-                    tick={{ fontSize: 12, fill: '#64748B' }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <Tooltip 
-                    content={<CustomDateTooltip />}
-                    cursor={{ fill: '#f1f5f9', opacity: 0.6 }}
-                  />
-                  <Bar 
-                    dataKey="count" 
-                    name="Kehadiran" 
-                    fill="url(#dateGradient)" 
-                    radius={[8, 8, 0, 0]} 
-                    barSize={60}
-                    animationDuration={1500}
-                  >
+                  <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} dy={10} />
+                  <YAxis tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} />
+                  <Tooltip content={<CustomDateTooltip />} cursor={{ fill: '#f1f5f9', opacity: 0.6 }} />
+                  <Bar dataKey="count" name="Kehadiran" fill="url(#dateGradient)" radius={[8, 8, 0, 0]} barSize={60} animationDuration={1500}>
                      {
-                      stats.dateDistribution.map((entry, index) => {
-                        const isSelected = selectedDate !== 'all' && selectedDate === entry.date;
-                        const opacity = selectedDate === 'all' || isSelected ? 1 : 0.4;
-                        return <Cell key={`cell-${index}`} fill="url(#dateGradient)" style={{ opacity, transition: 'opacity 0.3s ease' }} />;
-                      })
-                    }
+                       stats.dateDistribution.map((entry, index) => {
+                         const isSelected = selectedDate !== 'all' && selectedDate === entry.date;
+                         const opacity = selectedDate === 'all' || isSelected ? 1 : 0.4;
+                         return <Cell key={`cell-${index}`} fill="url(#dateGradient)" style={{ opacity, transition: 'opacity 0.3s ease' }} />;
+                       })
+                     }
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
+        </div>
 
+        {/* --- DUAL TAB TABLE SECTION --- */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-12">
+           {/* Tab Header */}
+           <div className="flex border-b border-slate-200">
+             <button
+               onClick={() => setActiveTab('registered')}
+               className={`flex-1 py-4 text-sm font-bold uppercase tracking-wider transition-colors flex items-center justify-center gap-2 ${
+                 activeTab === 'registered' 
+                   ? 'bg-white text-blue-600 border-b-2 border-blue-600' 
+                   : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+               }`}
+             >
+               <CheckCircle className="w-4 h-4" />
+               Hadir ({stats.filteredData.length})
+             </button>
+             <button
+               onClick={() => setActiveTab('not_registered')}
+               className={`flex-1 py-4 text-sm font-bold uppercase tracking-wider transition-colors flex items-center justify-center gap-2 ${
+                 activeTab === 'not_registered' 
+                   ? 'bg-white text-red-600 border-b-2 border-red-600' 
+                   : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+               }`}
+             >
+               <UserX className="w-4 h-4" />
+               Belum Hadir ({stats.notRegisteredData.length})
+             </button>
+           </div>
+           
+           {/* Tab Content */}
+           <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+             {activeTab === 'registered' ? (
+               // --- TABLE: YANG DAH DAFTAR ---
+               <table className="w-full text-left border-collapse">
+                 <thead className="bg-slate-50 sticky top-0 z-10">
+                   <tr>
+                     <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-200 w-16">Bil</th>
+                     <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-200">No Pekerja</th>
+                     <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-200">Nama</th>
+                     <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-200">Wing / Negeri</th>
+                     <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-200">Penempatan</th>
+                     <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-200">Tarikh / Sesi</th>
+                   </tr>
+                 </thead>
+                 <tbody className="divide-y divide-slate-100">
+                   {stats.filteredData.length > 0 ? (
+                     stats.filteredData.map((record, index) => (
+                       <tr key={index} className="hover:bg-slate-50/80 transition-colors">
+                         <td className="px-6 py-4 text-sm text-slate-500 font-mono">{index + 1}</td>
+                         <td className="px-6 py-4 text-sm font-medium text-slate-900">{record.no_pekerja}</td>
+                         <td className="px-6 py-4 text-sm text-slate-700 font-medium">
+                           {record.nama || <span className="text-slate-400 italic">Tiada Nama</span>}
+                         </td>
+                         <td className="px-6 py-4 text-sm text-slate-600">
+                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">
+                             {record.wing_negeri}
+                           </span>
+                         </td>
+                         <td className="px-6 py-4 text-sm text-slate-600">
+                           {record.penempatan || '-'}
+                         </td>
+                         <td className="px-6 py-4 text-sm text-slate-500">
+                           <div className="flex flex-col">
+                             <span>{formatDate(record.tarikh_kehadiran)}</span>
+                             <span className="text-xs text-slate-400">{record.sesi}</span>
+                           </div>
+                         </td>
+                       </tr>
+                     ))
+                   ) : (
+                     <tr>
+                       <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
+                         <div className="flex flex-col items-center justify-center gap-2">
+                           <Search className="w-8 h-8 opacity-20" />
+                           <p>Tiada rekod kehadiran dijumpai.</p>
+                         </div>
+                       </td>
+                     </tr>
+                   )}
+                 </tbody>
+               </table>
+             ) : (
+               // --- TABLE: BELUM DAFTAR ---
+               <table className="w-full text-left border-collapse">
+                 <thead className="bg-red-50 sticky top-0 z-10">
+                   <tr>
+                     <th className="px-6 py-4 text-xs font-semibold text-red-700 uppercase tracking-wider border-b border-red-200 w-16">Bil</th>
+                     <th className="px-6 py-4 text-xs font-semibold text-red-700 uppercase tracking-wider border-b border-red-200">No Pekerja</th>
+                     <th className="px-6 py-4 text-xs font-semibold text-red-700 uppercase tracking-wider border-b border-red-200">Nama</th>
+                     <th className="px-6 py-4 text-xs font-semibold text-red-700 uppercase tracking-wider border-b border-red-200">Wing / Negeri</th>
+                     <th className="px-6 py-4 text-xs font-semibold text-red-700 uppercase tracking-wider border-b border-red-200">Penempatan</th>
+                     <th className="px-6 py-4 text-xs font-semibold text-red-700 uppercase tracking-wider border-b border-red-200">Status</th>
+                   </tr>
+                 </thead>
+                 <tbody className="divide-y divide-red-100 bg-red-50/10">
+                   {stats.notRegisteredData.length > 0 ? (
+                     stats.notRegisteredData.map((record, index) => (
+                       <tr key={index} className="hover:bg-red-50 transition-colors">
+                         <td className="px-6 py-4 text-sm text-slate-500 font-mono">{index + 1}</td>
+                         <td className="px-6 py-4 text-sm font-medium text-slate-900">{record.no_pekerja}</td>
+                         <td className="px-6 py-4 text-sm text-slate-700 font-medium">{record.nama}</td>
+                         <td className="px-6 py-4 text-sm text-slate-600">
+                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                             {record.wing_negeri}
+                           </span>
+                         </td>
+                         <td className="px-6 py-4 text-sm text-slate-600">
+                           {record.penempatan || '-'}
+                         </td>
+                         <td className="px-6 py-4 text-sm text-red-500 font-bold italic">
+                           Belum Hadir
+                         </td>
+                       </tr>
+                     ))
+                   ) : (
+                     <tr>
+                       <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
+                         <div className="flex flex-col items-center justify-center gap-2">
+                           <CheckCircle className="w-8 h-8 text-green-500" />
+                           <p className="text-green-600 font-medium">Semua orang dalam senarai telah hadir!</p>
+                         </div>
+                       </td>
+                     </tr>
+                   )}
+                 </tbody>
+               </table>
+             )}
+           </div>
         </div>
 
         {/* Footer */}
