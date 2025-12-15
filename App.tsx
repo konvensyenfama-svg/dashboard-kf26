@@ -129,7 +129,7 @@ const App: React.FC = () => {
   
   // Tab State
   const [activeTab, setActiveTab] = useState<'registered' | 'not_registered'>('registered');
-   
+    
   // Data Storage
   const [rawData, setRawData] = useState<AttendanceRecord[]>([]);
   const [masterData, setMasterData] = useState<MasterRecord[]>([]); // New State untuk Master List
@@ -185,7 +185,7 @@ const App: React.FC = () => {
     setSelectedSession('all');
   }, [selectedDate]);
 
-  // Main Logic
+  // Main Logic (UPDATED WITH UNIQUE HEADCOUNT)
   const stats: DashboardStats = useMemo(() => {
     // 1. Filter Registered Data
     const filtered = rawData.filter(record => {
@@ -195,29 +195,38 @@ const App: React.FC = () => {
       return matchDate && matchSession && matchState;
     });
 
+    // --- FIX START: Logic Unique Headcount ---
+    // Menggunakan Set untuk mengira bilangan pekerja unik, bukan jumlah baris data
+    const uniqueParticipants = new Set(filtered.map(r => r.no_pekerja));
+    const totalHeadcount = uniqueParticipants.size;
+    // --- FIX END ---
+
     // 2. Cari Yang Belum Daftar (Compare rawData vs masterData)
-    // Ambil list ID yang dah hadir
-    const registeredIDs = new Set(rawData.map(r => r.no_pekerja));
+    // Ambil list ID yang dah hadir (dari Set tadi)
     
-    // Filter Master List yang ID dia TIADA dalam registeredIDs
-    let notRegistered = masterData.filter(staff => !registeredIDs.has(staff.no_pekerja));
+    // Filter Master List yang ID dia TIADA dalam uniqueParticipants
+    let notRegistered = masterData.filter(staff => !uniqueParticipants.has(staff.no_pekerja));
 
     // Apply Filter Negeri juga untuk list 'Belum Daftar'
     if (selectedState !== 'all') {
       notRegistered = notRegistered.filter(staff => staff.wing_negeri === selectedState);
     }
 
-    // 3. Aggregate Counts (Logic asal)
-    const totalParticipants = filtered.length;
+    // 3. Aggregate Counts
     const dateMap: Record<string, number> = {};
-    const stateMap: Record<string, number> = {};
+    const stateUniqueMap: Record<string, Set<string>> = {}; // FIX: Guna Set untuk simpan ID unik per negeri
 
     filtered.forEach((record) => {
+      // Date count (Kekal kira 'traffic' atau check-in count)
       const dateKey = record.tarikh_kehadiran ? record.tarikh_kehadiran.trim() : 'N/A';
       dateMap[dateKey] = (dateMap[dateKey] || 0) + 1;
 
+      // State count (FIX: Simpan ID unik dalam Set)
       const stateKey = record.wing_negeri ? record.wing_negeri.trim() : 'Lain-lain';
-      stateMap[stateKey] = (stateMap[stateKey] || 0) + 1;
+      if (!stateUniqueMap[stateKey]) {
+        stateUniqueMap[stateKey] = new Set();
+      }
+      stateUniqueMap[stateKey].add(record.no_pekerja);
     });
 
     const dateDistribution: DateStat[] = Object.entries(dateMap).map(([date, count]) => ({
@@ -231,7 +240,8 @@ const App: React.FC = () => {
     }
 
     const stateDistribution: StateStat[] = stateKeys.map(key => {
-      const count = stateMap[key] || 0;
+      // FIX: Kira saiz Set (bilangan orang unik), bukan total count
+      const count = stateUniqueMap[key] ? stateUniqueMap[key].size : 0;
       const target = PRESET_TARGETS[key] || 0;
       return {
         state: key,
@@ -266,11 +276,11 @@ const App: React.FC = () => {
       : (PRESET_TARGETS[selectedState] || 0);
 
     const overallPercentage = totalTarget > 0 
-      ? Math.round((totalParticipants / totalTarget) * 100) 
+      ? Math.round((totalHeadcount / totalTarget) * 100) 
       : 0;
 
     return {
-      totalParticipants,
+      totalParticipants: totalHeadcount, // Return headcount unik
       totalTarget,
       overallPercentage,
       topDay,
@@ -457,16 +467,16 @@ const App: React.FC = () => {
                <p className="text-sm font-medium text-slate-700 font-mono">
                  {lastUpdated.toLocaleTimeString('ms-MY', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                </p>
-             </div>
-             
-             <button
-               onClick={fetchAttendanceData}
-               disabled={loading}
-               className="group flex items-center space-x-2 bg-white border border-slate-200 hover:border-blue-300 text-slate-600 hover:text-blue-600 px-4 py-2.5 rounded-xl shadow-sm hover:shadow transition-all active:scale-95 disabled:opacity-70 disabled:cursor-not-allowed"
-             >
-               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-blue-500' : 'group-hover:text-blue-500'}`} />
-               <span className="hidden sm:inline font-medium">Muat Semula</span>
-             </button>
+              </div>
+              
+              <button
+                onClick={fetchAttendanceData}
+                disabled={loading}
+                className="group flex items-center space-x-2 bg-white border border-slate-200 hover:border-blue-300 text-slate-600 hover:text-blue-600 px-4 py-2.5 rounded-xl shadow-sm hover:shadow transition-all active:scale-95 disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-blue-500' : 'group-hover:text-blue-500'}`} />
+                <span className="hidden sm:inline font-medium">Muat Semula</span>
+              </button>
           </div>
         </div>
       </header>
@@ -537,7 +547,7 @@ const App: React.FC = () => {
                 <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
                    <Users className="w-5 h-5" />
                 </div>
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Jumlah Kehadiran</p>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Jumlah Kehadiran (Unik)</p>
               </div>
               <div className="flex items-baseline gap-2 mb-2">
                 <span className="text-4xl font-bold text-slate-900 tracking-tight">
@@ -584,7 +594,7 @@ const App: React.FC = () => {
                 <span className="text-sm font-bold text-emerald-700">
                    {stats.topDay ? stats.topDay.count.toLocaleString() : 0}
                 </span>
-                <span className="text-xs text-emerald-600">Peserta</span>
+                <span className="text-xs text-emerald-600">Check-in</span>
               </div>
             </div>
           </div>
@@ -631,10 +641,10 @@ const App: React.FC = () => {
                   Prestasi Mengikut Wing / Negeri
                   {selectedState !== 'all' && <span className="text-xs font-normal px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">Filtered</span>}
                 </h2>
-                <p className="text-sm text-slate-500 mt-1">Carta menunjukkan jumlah kehadiran berbanding sasaran.</p>
+                <p className="text-sm text-slate-500 mt-1">Carta menunjukkan jumlah kehadiran (unik) berbanding sasaran.</p>
               </div>
             </div>
-            
+             
             <div className="h-[600px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart 
@@ -704,13 +714,13 @@ const App: React.FC = () => {
                   <YAxis tick={{ fontSize: 12, fill: '#64748B' }} axisLine={false} tickLine={false} />
                   <Tooltip content={<CustomDateTooltip />} cursor={{ fill: '#f1f5f9', opacity: 0.6 }} />
                   <Bar dataKey="count" name="Kehadiran" fill="url(#dateGradient)" radius={[8, 8, 0, 0]} barSize={60} animationDuration={1500}>
-                     {
-                       stats.dateDistribution.map((entry, index) => {
-                         const isSelected = selectedDate !== 'all' && selectedDate === entry.date;
-                         const opacity = selectedDate === 'all' || isSelected ? 1 : 0.4;
-                         return <Cell key={`cell-${index}`} fill="url(#dateGradient)" style={{ opacity, transition: 'opacity 0.3s ease' }} />;
-                       })
-                     }
+                      {
+                        stats.dateDistribution.map((entry, index) => {
+                          const isSelected = selectedDate !== 'all' && selectedDate === entry.date;
+                          const opacity = selectedDate === 'all' || isSelected ? 1 : 0.4;
+                          return <Cell key={`cell-${index}`} fill="url(#dateGradient)" style={{ opacity, transition: 'opacity 0.3s ease' }} />;
+                        })
+                      }
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
@@ -836,7 +846,7 @@ const App: React.FC = () => {
                        <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
                          <div className="flex flex-col items-center justify-center gap-2">
                            <CheckCircle className="w-8 h-8 text-green-500" />
-                           <p className="text-green-600 font-medium">Semua orang dalam senarai telah hadir!</p>
+                           <p className="text-green-600 font-medium">Semua peserta dalam senarai telah hadir!</p>
                          </div>
                        </td>
                      </tr>
