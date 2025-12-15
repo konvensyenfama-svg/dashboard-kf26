@@ -20,10 +20,8 @@ import {
   Filter,
   Lock,
   Search,
-  User,
   UserX,
   CheckCircle,
-  Database
 } from 'lucide-react';
 
 // --- CONFIGURATIONS ---
@@ -122,6 +120,13 @@ export interface DashboardStats {
   notRegisteredData: MasterRecord[];
 }
 
+// Type untuk lock juara
+interface WinnerLock {
+    state: string;
+    percentage: number;
+    timestamp: string; // Tambah timestamp untuk rekod bila dia menang
+}
+
 const App: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -132,20 +137,21 @@ const App: React.FC = () => {
     
   // Data Storage
   const [rawData, setRawData] = useState<AttendanceRecord[]>([]);
-  const [masterData, setMasterData] = useState<MasterRecord[]>([]); // New State untuk Master List
+  const [masterData, setMasterData] = useState<MasterRecord[]>([]);
 
   // Filter States
   const [selectedDate, setSelectedDate] = useState<string>('all');
   const [selectedSession, setSelectedSession] = useState<string>('all');
   const [selectedState, setSelectedState] = useState<string>('all');
 
-  // Winner Lock
-  const [lockedWinner, setLockedWinner] = useState<{state: string, percentage: number} | null>(() => {
+  // --- UPDATED: Winner Lock Logic (By Session) ---
+  // Kita simpan object: { "Sesi 1": {state: "Johor", ...}, "Sesi 2": {state: "Perak", ...} }
+  const [sessionWinners, setSessionWinners] = useState<Record<string, WinnerLock>>(() => {
     try {
-      const saved = localStorage.getItem('fama_champion_lock');
-      return saved ? JSON.parse(saved) : null;
+      const saved = localStorage.getItem('fama_session_winners_v2'); // Guna key baru version 2
+      return saved ? JSON.parse(saved) : {};
     } catch (e) {
-      return null;
+      return {};
     }
   });
 
@@ -168,7 +174,7 @@ const App: React.FC = () => {
     const states = new Set([
       ...Object.keys(PRESET_TARGETS),
       ...rawData.map(r => r.wing_negeri).filter(Boolean),
-      ...masterData.map(r => r.wing_negeri).filter(Boolean) // Include states from master list too
+      ...masterData.map(r => r.wing_negeri).filter(Boolean)
     ] as string[]);
 
     return Array.from(states).sort((a, b) => {
@@ -182,10 +188,11 @@ const App: React.FC = () => {
   }, [rawData, masterData]);
 
   useEffect(() => {
+    // Reset session filter bila tukar tarikh, tapi JANGAN reset sessionWinners state
     setSelectedSession('all');
   }, [selectedDate]);
 
-  // Main Logic (UPDATED WITH UNIQUE HEADCOUNT)
+  // Main Logic
   const stats: DashboardStats = useMemo(() => {
     // 1. Filter Registered Data
     const filtered = rawData.filter(record => {
@@ -195,33 +202,24 @@ const App: React.FC = () => {
       return matchDate && matchSession && matchState;
     });
 
-    // --- FIX START: Logic Unique Headcount ---
-    // Menggunakan Set untuk mengira bilangan pekerja unik, bukan jumlah baris data
     const uniqueParticipants = new Set(filtered.map(r => r.no_pekerja));
     const totalHeadcount = uniqueParticipants.size;
-    // --- FIX END ---
 
-    // 2. Cari Yang Belum Daftar (Compare rawData vs masterData)
-    // Ambil list ID yang dah hadir (dari Set tadi)
-    
-    // Filter Master List yang ID dia TIADA dalam uniqueParticipants
+    // 2. Cari Yang Belum Daftar
     let notRegistered = masterData.filter(staff => !uniqueParticipants.has(staff.no_pekerja));
 
-    // Apply Filter Negeri juga untuk list 'Belum Daftar'
     if (selectedState !== 'all') {
       notRegistered = notRegistered.filter(staff => staff.wing_negeri === selectedState);
     }
 
     // 3. Aggregate Counts
     const dateMap: Record<string, number> = {};
-    const stateUniqueMap: Record<string, Set<string>> = {}; // FIX: Guna Set untuk simpan ID unik per negeri
+    const stateUniqueMap: Record<string, Set<string>> = {};
 
     filtered.forEach((record) => {
-      // Date count (Kekal kira 'traffic' atau check-in count)
       const dateKey = record.tarikh_kehadiran ? record.tarikh_kehadiran.trim() : 'N/A';
       dateMap[dateKey] = (dateMap[dateKey] || 0) + 1;
 
-      // State count (FIX: Simpan ID unik dalam Set)
       const stateKey = record.wing_negeri ? record.wing_negeri.trim() : 'Lain-lain';
       if (!stateUniqueMap[stateKey]) {
         stateUniqueMap[stateKey] = new Set();
@@ -240,7 +238,6 @@ const App: React.FC = () => {
     }
 
     const stateDistribution: StateStat[] = stateKeys.map(key => {
-      // FIX: Kira saiz Set (bilangan orang unik), bukan total count
       const count = stateUniqueMap[key] ? stateUniqueMap[key].size : 0;
       const target = PRESET_TARGETS[key] || 0;
       return {
@@ -280,7 +277,7 @@ const App: React.FC = () => {
       : 0;
 
     return {
-      totalParticipants: totalHeadcount, // Return headcount unik
+      totalParticipants: totalHeadcount,
       totalTarget,
       overallPercentage,
       topDay,
@@ -292,20 +289,42 @@ const App: React.FC = () => {
     };
   }, [rawData, masterData, selectedDate, selectedSession, selectedState]);
 
-  // Lock Winner Logic
+  // --- UPDATED: Lock Winner Logic (Per Session) ---
   useEffect(() => {
-    if (lockedWinner) return;
+    // 1. Tentukan key sesi sekarang. Kalau 'all', kita boleh guna key 'OVERALL' atau nama sesi 'all'
+    // Tapi user request: "JUARA SESI", jadi better lock bila user pilih spesifik sesi.
+    // Kalau user pilih 'all', kita tak lock, atau kita tunjuk overall leader tanpa lock.
+    // UNTUK KES NI: Kita akan lock 'all' juga sebagai satu entiti kalau ada yang capai 100% overall.
+    const currentSessionKey = selectedSession;
+
+    // 2. Check kalau sesi ni dah ada pemenang
+    if (sessionWinners[currentSessionKey]) return;
+
+    // 3. Cari pemenang baru dalam stats semasa
     const champion = stats.stateDistribution.find(s => s.percentage >= 100);
+    
     if (champion) {
-      const winnerData = { state: champion.state, percentage: champion.percentage };
-      setLockedWinner(winnerData);
-      localStorage.setItem('fama_champion_lock', JSON.stringify(winnerData));
+      const winnerData: WinnerLock = { 
+        state: champion.state, 
+        percentage: champion.percentage,
+        timestamp: new Date().toISOString()
+      };
+
+      const updatedWinners = {
+        ...sessionWinners,
+        [currentSessionKey]: winnerData
+      };
+
+      setSessionWinners(updatedWinners);
+      localStorage.setItem('fama_session_winners_v2', JSON.stringify(updatedWinners));
     }
-  }, [stats.stateDistribution, lockedWinner]);
+  }, [stats.stateDistribution, selectedSession, sessionWinners]);
+
+  // Helper untuk dapatkan juara sesi semasa (untuk display)
+  const currentSessionWinner = sessionWinners[selectedSession];
 
   // --- FETCH DATA ---
 
-  // 1. Fetch Master List (Sekali je masa load)
   useEffect(() => {
     const fetchMasterList = async () => {
       if (!supabase) return;
@@ -324,7 +343,6 @@ const App: React.FC = () => {
     fetchMasterList();
   }, []);
 
-  // 2. Fetch Attendance (Live - Interval)
   const fetchAttendanceData = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -599,34 +617,40 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Card 3 (With Lock) */}
+          {/* Card 3 (With Session Lock Logic) */}
           <div className="bg-white rounded-2xl shadow-[0_2px_10px_-3px_rgba(99,102,241,0.1)] border border-slate-100 p-6 relative overflow-hidden group hover:translate-y-[-2px] transition-all duration-300">
             <div className="absolute top-0 right-0 p-6 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
               <MapPin className="w-32 h-32 text-indigo-600" />
             </div>
              <div className="relative z-10">
                <div className="flex items-center gap-2 mb-3">
-                <div className={`p-2 rounded-lg ${lockedWinner ? 'bg-amber-100 text-amber-600' : 'bg-indigo-50 text-indigo-600'}`}>
-                   {lockedWinner ? <Lock className="w-5 h-5" /> : <MapPin className="w-5 h-5" />}
+                <div className={`p-2 rounded-lg ${currentSessionWinner ? 'bg-amber-100 text-amber-600' : 'bg-indigo-50 text-indigo-600'}`}>
+                   {currentSessionWinner ? <Lock className="w-5 h-5" /> : <MapPin className="w-5 h-5" />}
                 </div>
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  {lockedWinner ? 'JUARA SESI (Pertama Capai 100%)' : 'Wing / Negeri Terbaik'}
-                </p>
+                <div className="flex flex-col">
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    {currentSessionWinner ? 'JUARA (Pertama 100%)' : 'Wing / Negeri Terbaik'}
+                  </p>
+                  {/* Tunjuk Sesi apa yg dilock */}
+                  {selectedSession !== 'all' && (
+                    <span className="text-[10px] text-slate-400 font-mono uppercase">{selectedSession}</span>
+                  )}
+                </div>
               </div>
               <div className="mb-2">
                 <span className="text-3xl font-bold text-slate-900 block truncate tracking-tight">
-                  {lockedWinner 
-                    ? lockedWinner.state 
+                  {currentSessionWinner 
+                    ? currentSessionWinner.state 
                     : (stats.topState ? stats.topState.state : '-')}
                 </span>
               </div>
-               <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${lockedWinner ? 'bg-amber-50 border-amber-200' : 'bg-indigo-50 border-indigo-100'}`}>
-                <span className={`text-sm font-bold ${lockedWinner ? 'text-amber-700' : 'text-indigo-700'}`}>
-                   {lockedWinner 
-                     ? lockedWinner.percentage 
+               <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${currentSessionWinner ? 'bg-amber-50 border-amber-200' : 'bg-indigo-50 border-indigo-100'}`}>
+                <span className={`text-sm font-bold ${currentSessionWinner ? 'text-amber-700' : 'text-indigo-700'}`}>
+                   {currentSessionWinner 
+                     ? currentSessionWinner.percentage 
                      : (stats.topState ? stats.topState.percentage : 0)}%
                 </span>
-                <span className={`text-xs ${lockedWinner ? 'text-amber-600' : 'text-indigo-600'}`}>Pencapaian</span>
+                <span className={`text-xs ${currentSessionWinner ? 'text-amber-600' : 'text-indigo-600'}`}>Pencapaian</span>
               </div>
             </div>
           </div>
